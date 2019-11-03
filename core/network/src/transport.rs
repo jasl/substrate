@@ -90,7 +90,7 @@ pub fn build_transport(
 	#[cfg(not(target_os = "unknown"))]
 	let transport = transport.and_then(move |stream, endpoint| {
 		let upgrade = core::upgrade::SelectUpgrade::new(noise_config, secio_config);
-		core::upgrade::apply(stream, upgrade, endpoint)
+		core::upgrade::apply(stream, upgrade, endpoint, core::upgrade::Version::default())
 			.and_then(|out| match out {
 				// We negotiated noise
 				EitherOutput::First((remote_id, out)) => {
@@ -109,7 +109,7 @@ pub fn build_transport(
 	// For WASM, we only support secio for now.
 	#[cfg(target_os = "unknown")]
 	let transport = transport.and_then(move |stream, endpoint| {
-		core::upgrade::apply(stream, secio_config, endpoint)
+		core::upgrade::apply(stream, secio_config, endpoint, core::upgrade::Version::default())
 			.and_then(|out| Ok((out.stream, out.remote_key.into_peer_id())))
 	});
 
@@ -120,11 +120,11 @@ pub fn build_transport(
 				.map_inbound(move |muxer| (peer_id, muxer))
 				.map_outbound(move |muxer| (peer_id2, muxer));
 
-			core::upgrade::apply(stream, upgrade, endpoint)
+			core::upgrade::apply(stream, upgrade, endpoint, core::upgrade::Version::default())
 				.map(|(id, muxer)| (id, core::muxing::StreamMuxerBox::new(muxer)))
 		})
 
-		.with_timeout(Duration::from_secs(20))
+		.timeout(Duration::from_secs(20))
 		.map_err(|err| io::Error::new(io::ErrorKind::Other, err))
 		.boxed();
 
