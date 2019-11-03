@@ -14,16 +14,14 @@
 // You should have received a copy of the GNU General Public License
 // along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
 
-use futures::prelude::*;
 use libp2p::{
-	InboundUpgradeExt, OutboundUpgradeExt, PeerId, Transport,
+	PeerId, Transport,
 	mplex, identity, secio, yamux, bandwidth, wasm_ext
 };
 #[cfg(not(target_os = "unknown"))]
 use libp2p::{tcp, dns, websocket, noise};
 #[cfg(not(target_os = "unknown"))]
-use libp2p::core::{upgrade, either::EitherError, either::EitherOutput};
-use libp2p::core::{self, transport::boxed::Boxed, transport::OptionalTransport, muxing::StreamMuxerBox};
+use libp2p::core::{upgrade, transport::boxed::Boxed, transport::OptionalTransport, muxing::StreamMuxerBox};
 use std::{io, sync::Arc, time::Duration, usize};
 
 pub use self::bandwidth::BandwidthSinks;
@@ -84,46 +82,64 @@ pub fn build_transport(
 
 	let (transport, sinks) = bandwidth::BandwidthLogging::new(transport, Duration::from_secs(5));
 
+	let transport = transport.upgrade(upgrade::Version::default());
+
 	// Encryption
 
 	// For non-WASM, we support both secio and noise.
 	#[cfg(not(target_os = "unknown"))]
-	let transport = transport.and_then(move |stream, endpoint| {
-		let upgrade = core::upgrade::SelectUpgrade::new(noise_config, secio_config);
-		core::upgrade::apply(stream, upgrade, endpoint, core::upgrade::Version::default())
-			.and_then(|out| match out {
-				// We negotiated noise
-				EitherOutput::First((remote_id, out)) => {
-					let remote_key = match remote_id {
-						noise::RemoteIdentity::IdentityKey(key) => key,
-						_ => return Err(upgrade::UpgradeError::Apply(EitherError::A(noise::NoiseError::InvalidKey)))
-					};
-					Ok((EitherOutput::First(out), remote_key.into_peer_id()))
-				}
-				// We negotiated secio
-				EitherOutput::Second(out) =>
-					Ok((EitherOutput::Second(out.stream), out.remote_key.into_peer_id()))
-			})
-	});
+	let transport = transport
+		.authenticate(noise_config.into_authenticated());
+// TODO: DON'T KNOW HOW TO MADE IT WORK
+//	#[cfg(not(target_os = "unknown"))]
+//	let transport = transport
+//		.authenticate(upgrade::SelectUpgrade::new(noise_config, secio_config));
+
+	// For non-WASM, we support both secio and noise.
+//	#[cfg(not(target_os = "unknown"))]
+//	let transport = transport.and_then(move |stream, endpoint| {
+//		let upgrade = core::upgrade::SelectUpgrade::new(noise_config, secio_config);
+//		core::upgrade::apply(stream, upgrade, endpoint, core::upgrade::Version::default())
+//			.and_then(|out| match out {
+//				// We negotiated noise
+//				EitherOutput::First((remote_id, out)) => {
+//					let remote_key = match remote_id {
+//						noise::RemoteIdentity::IdentityKey(key) => key,
+//						_ => return Err(upgrade::UpgradeError::Apply(EitherError::A(noise::NoiseError::InvalidKey)))
+//					};
+//					Ok((EitherOutput::First(out), remote_key.into_peer_id()))
+//				}
+//				// We negotiated secio
+//				EitherOutput::Second(out) =>
+//					Ok((EitherOutput::Second(out.stream), out.remote_key.into_peer_id()))
+//			})
+//	});
+
+	// For WASM, we only support secio for now.
+//	#[cfg(target_os = "unknown")]
+//	let transport = transport.and_then(move |stream, endpoint| {
+//		core::upgrade::apply(stream, secio_config, endpoint, core::upgrade::Version::default())
+//			.and_then(|out| Ok((out.stream, out.remote_key.into_peer_id())))
+//	});
 
 	// For WASM, we only support secio for now.
 	#[cfg(target_os = "unknown")]
-	let transport = transport.and_then(move |stream, endpoint| {
-		core::upgrade::apply(stream, secio_config, endpoint, core::upgrade::Version::default())
-			.and_then(|out| Ok((out.stream, out.remote_key.into_peer_id())))
-	});
+	let transport = transport.authenticate(secio_config);
 
 	// Multiplexing
-	let transport = transport.and_then(move |(stream, peer_id), endpoint| {
-			let peer_id2 = peer_id.clone();
-			let upgrade = core::upgrade::SelectUpgrade::new(yamux_config, mplex_config)
-				.map_inbound(move |muxer| (peer_id, muxer))
-				.map_outbound(move |muxer| (peer_id2, muxer));
-
-			core::upgrade::apply(stream, upgrade, endpoint, core::upgrade::Version::default())
-				.map(|(id, muxer)| (id, core::muxing::StreamMuxerBox::new(muxer)))
-		})
-
+//	let transport = transport.and_then(move |(stream, peer_id), endpoint| {
+//			let peer_id2 = peer_id.clone();
+//			let upgrade = core::upgrade::SelectUpgrade::new(yamux_config, mplex_config)
+//				.map_inbound(move |muxer| (peer_id, muxer))
+//				.map_outbound(move |muxer| (peer_id2, muxer));
+//
+//			core::upgrade::apply(stream, upgrade, endpoint, core::upgrade::Version::default())
+//				.map(|(id, muxer)| (id, core::muxing::StreamMuxerBox::new(muxer)))
+//		})
+	let upgrade = upgrade::SelectUpgrade::new(yamux_config, mplex_config);
+	let transport = transport
+		.multiplex(upgrade)
+		.map(|(id, muxer), _| (id, StreamMuxerBox::new(muxer)))
 		.timeout(Duration::from_secs(20))
 		.map_err(|err| io::Error::new(io::ErrorKind::Other, err))
 		.boxed();

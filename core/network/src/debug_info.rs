@@ -292,10 +292,10 @@ where TSubstream: AsyncRead + AsyncWrite {
 							let event = DebugInfoEvent::Identified { peer_id, info };
 							return Async::Ready(NetworkBehaviourAction::GenerateEvent(event));
 						}
-						IdentifyEvent::Error { .. } => {}
 						IdentifyEvent::Error { error: ProtocolsHandlerUpgrErr::Upgrade(UpgradeError::Apply(ref err)), ref peer_id } =>
 							debug!(target: "sub-libp2p", "Error when sending back identify info \
 								to {:?} => {}", peer_id, err),
+						IdentifyEvent::Error { .. } => {}
 						IdentifyEvent::Sent { .. } => {}
 					}
 				},
